@@ -45,18 +45,39 @@ jobs:
           echo "region=${{ env.OCI_CLI_REGION }}" >> ~/.oci/config
           echo "${{ secrets.SSH_PUBLIC_KEY }}" > /home/runner/my_ssh_key.pub
 
-          # Automatically find the latest Canonical Ubuntu 22.04 Minimal aarch64 image in this region
+          echo "--- Listing all Canonical Ubuntu aarch64 images available in this region ---"
+          oci compute image list \
+            --compartment-id "$COMPARTMENT_ID" \
+            --operating-system "Canonical Ubuntu" \
+            --shape "VM.Standard.A1.Flex" \
+            --all \
+            --query "data[*].{Name:\"display-name\", ID:id}" \
+            --output table 2>&1 || echo "LIST COMMAND FAILED (see above for error)"
+
+          echo "--- Resolving specific image OCID ---"
           IMAGE_ID=$(oci compute image list \
             --compartment-id "$COMPARTMENT_ID" \
             --operating-system "Canonical Ubuntu" \
-            --operating-system-version "22.04 Minimal aarch64" \
             --shape "VM.Standard.A1.Flex" \
             --sort-by TIMECREATED \
             --sort-order DESC \
             --raw-output \
-            --query "data[0].id" 2>&1)
+            --query "data[?contains(\"display-name\", '22.04-Minimal-aarch64')] | [0].id" 2>&1) || true
 
           echo "Resolved IMAGE_ID: $IMAGE_ID"
+
+          if [ -z "$IMAGE_ID" ] || [[ "$IMAGE_ID" == *"ServiceError"* ]] || [[ "$IMAGE_ID" == "null" ]]; then
+            echo "Could not resolve a valid image ID. Falling back to first available Canonical Ubuntu aarch64 image."
+            IMAGE_ID=$(oci compute image list \
+              --compartment-id "$COMPARTMENT_ID" \
+              --operating-system "Canonical Ubuntu" \
+              --shape "VM.Standard.A1.Flex" \
+              --sort-by TIMECREATED \
+              --sort-order DESC \
+              --raw-output \
+              --query "data[?contains(\"display-name\", 'aarch64')] | [0].id" 2>&1) || true
+            echo "Fallback IMAGE_ID: $IMAGE_ID"
+          fi
 
           # Run the command, capture ALL output, and use '|| true' to prevent the script from exiting early.
           OCI_OUTPUT=$(oci compute instance launch \
@@ -69,11 +90,13 @@ jobs:
             --ssh-authorized-keys-file "/home/runner/my_ssh_key.pub" \
             --assign-public-ip true \
             --display-name "wordpress-vm" \
-            --boot-volume-size-in-gbs 50 2>&1 || true)
+            --boot-volume-size-in-gbs 50 2>&1) || true
           # Store the log as a GitHub step output
           echo "log_data<<EOF" >> $GITHUB_OUTPUT
           echo "$OCI_OUTPUT" >> $GITHUB_OUTPUT
           echo "EOF" >> $GITHUB_OUTPUT
+          echo "--- Instance launch output ---"
+          echo "$OCI_OUTPUT"
           # Check the log content for an error string.
           if echo "$OCI_OUTPUT" | grep -q '"lifecycle-state": "PROVISIONING"'; then
             echo "Success! 'PROVISIONING' state found in output."
