@@ -30,6 +30,9 @@ jobs:
           set -o pipefail
           # Make sure no stray OCI_CLI_* env vars override our clean config file
           unset OCI_CLI_USER OCI_CLI_TENANCY OCI_CLI_FINGERPRINT OCI_CLI_KEY_CONTENT OCI_CLI_KEY_FILE
+          # Silence noisy CLI warnings so they never leak into captured variables
+          export SUPPRESS_LABEL_WARNING=True
+          export OCI_CLI_SUPPRESS_FILE_PERMISSIONS_WARNING=True
           pip install oci-cli
           sudo apt-get update -y && sudo apt-get install -y jq
           mkdir -p ~/.oci
@@ -50,6 +53,7 @@ jobs:
           echo "fingerprint=$CLEAN_FINGERPRINT" >> ~/.oci/config
           echo "key_file=~/.oci/oci_api_key.pem" >> ~/.oci/config
           echo "region=${{ env.OCI_CLI_REGION }}" >> ~/.oci/config
+          chmod 600 ~/.oci/config
           echo "${{ secrets.SSH_PUBLIC_KEY }}" > /home/runner/my_ssh_key.pub
 
           # Overwrite the env-based IDs with the sanitized versions for the rest of the script
@@ -80,7 +84,8 @@ jobs:
             --sort-by TIMECREATED \
             --sort-order DESC \
             --raw-output \
-            --query "data[?contains(\"display-name\", '22.04-Minimal-aarch64')] | [0].id" 2>&1) || true
+            --query "data[?contains(\"display-name\", '22.04-Minimal-aarch64')] | [0].id" 2>/dev/null)
+          IMAGE_ID=$(echo "$IMAGE_ID" | tr -d '\r\n' | xargs)
 
           echo "Resolved IMAGE_ID: $IMAGE_ID"
 
@@ -93,7 +98,8 @@ jobs:
               --sort-by TIMECREATED \
               --sort-order DESC \
               --raw-output \
-              --query "data[?contains(\"display-name\", 'aarch64')] | [0].id" 2>&1) || true
+              --query "data[?contains(\"display-name\", 'aarch64')] | [0].id" 2>/dev/null)
+            IMAGE_ID=$(echo "$IMAGE_ID" | tr -d '\r\n' | xargs)
             echo "Fallback IMAGE_ID: $IMAGE_ID"
           fi
 
