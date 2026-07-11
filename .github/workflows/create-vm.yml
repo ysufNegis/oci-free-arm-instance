@@ -10,10 +10,6 @@ env:
   SUBNET_ID: ${{ secrets.OCI_SUBNET_ID }}
   AD_NAME: "QSEi:EU-PARIS-1-AD-1"
   OCI_CLI_REGION: "eu-paris-1"
-  OCI_CLI_USER: ${{ secrets.OCI_CLI_USER }}
-  OCI_CLI_TENANCY: ${{ secrets.OCI_CLI_TENANCY }}
-  OCI_CLI_FINGERPRINT: ${{ secrets.OCI_CLI_FINGERPRINT }}
-  OCI_CLI_KEY_CONTENT: ${{ secrets.OCI_CLI_KEY_CONTENT }}
 jobs:
   build-and-deploy:
     runs-on: ubuntu-latest
@@ -32,6 +28,8 @@ jobs:
         continue-on-error: true
         run: |
           set -o pipefail
+          # Make sure no stray OCI_CLI_* env vars override our clean config file
+          unset OCI_CLI_USER OCI_CLI_TENANCY OCI_CLI_FINGERPRINT OCI_CLI_KEY_CONTENT OCI_CLI_KEY_FILE
           pip install oci-cli
           sudo apt-get update -y && sudo apt-get install -y jq
           mkdir -p ~/.oci
