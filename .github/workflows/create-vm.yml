@@ -7,15 +7,13 @@ on:
   workflow_dispatch:
 env:
   COMPARTMENT_ID: ${{ secrets.OCI_COMPARTMENT_ID }}
-  IMAGE_ID: "ocid1.image.oc1.ap-singapore-1.aaaaaaaa5a3xwkk5vaichk47fms2uzvsqeriats2uorf6kwgq3l3nwrbhipa"
   SUBNET_ID: ${{ secrets.OCI_SUBNET_ID }}
-  AD_NAME: "KClJ:AP-SINGAPORE-1-AD-1"
-  OCI_CLI_REGION: "ap-singapore-1"
+  AD_NAME: "QSEi:EU-PARIS-1-AD-1"
+  OCI_CLI_REGION: "eu-paris-1"
   OCI_CLI_USER: ${{ secrets.OCI_CLI_USER }}
   OCI_CLI_TENANCY: ${{ secrets.OCI_CLI_TENANCY }}
   OCI_CLI_FINGERPRINT: ${{ secrets.OCI_CLI_FINGERPRINT }}
   OCI_CLI_KEY_CONTENT: ${{ secrets.OCI_CLI_KEY_CONTENT }}
-
 jobs:
   build-and-deploy:
     runs-on: ubuntu-latest
@@ -26,23 +24,19 @@ jobs:
         with:
           path: ~/.local
           key: ${{ runner.os }}-pip-oci-cli-v1
-
       - name: Add OCI CLI to path
         run: echo "$HOME/.local/bin" >> $GITHUB_PATH
-
       - name: Setup OCI CLI and Try to Create VM
         id: create_vm
         # This forces the job to succeed so the cache will save.
-        continue-on-error: true 
+        continue-on-error: true
         run: |
           set -o pipefail
-
           pip install oci-cli
-
+          sudo apt-get update -y && sudo apt-get install -y jq
           mkdir -p ~/.oci
           echo "${{ secrets.OCI_CLI_KEY_CONTENT }}" > ~/.oci/oci_api_key.pem
           chmod 600 ~/.oci/oci_api_key.pem
-
           echo "[DEFAULT]" > ~/.oci/config
           echo "user=${{ secrets.OCI_CLI_USER }}" >> ~/.oci/config
           echo "tenancy=${{ secrets.OCI_CLI_TENANCY }}" >> ~/.oci/config
@@ -51,24 +45,35 @@ jobs:
           echo "region=${{ env.OCI_CLI_REGION }}" >> ~/.oci/config
           echo "${{ secrets.SSH_PUBLIC_KEY }}" > /home/runner/my_ssh_key.pub
 
+          # Automatically find the latest Canonical Ubuntu 22.04 Minimal aarch64 image in this region
+          IMAGE_ID=$(oci compute image list \
+            --compartment-id "$COMPARTMENT_ID" \
+            --operating-system "Canonical Ubuntu" \
+            --operating-system-version "22.04 Minimal aarch64" \
+            --shape "VM.Standard.A1.Flex" \
+            --sort-by TIMECREATED \
+            --sort-order DESC \
+            --raw-output \
+            --query "data[0].id" 2>&1)
+
+          echo "Resolved IMAGE_ID: $IMAGE_ID"
+
           # Run the command, capture ALL output, and use '|| true' to prevent the script from exiting early.
           OCI_OUTPUT=$(oci compute instance launch \
             --compartment-id "$COMPARTMENT_ID" \
             --availability-domain "$AD_NAME" \
             --shape "VM.Standard.A1.Flex" \
-            --shape-config '{"ocpus":4,"memoryInGBs":24}' \
+            --shape-config '{"ocpus":2,"memoryInGBs":12}' \
             --subnet-id "$SUBNET_ID" \
             --image-id "$IMAGE_ID" \
             --ssh-authorized-keys-file "/home/runner/my_ssh_key.pub" \
             --assign-public-ip true \
-            --display-name "coolify-vm" \
-            --boot-volume-size-in-gbs 200 2>&1 || true)
-
+            --display-name "wordpress-vm" \
+            --boot-volume-size-in-gbs 50 2>&1 || true)
           # Store the log as a GitHub step output
           echo "log_data<<EOF" >> $GITHUB_OUTPUT
           echo "$OCI_OUTPUT" >> $GITHUB_OUTPUT
           echo "EOF" >> $GITHUB_OUTPUT
-
           # Check the log content for an error string.
           if echo "$OCI_OUTPUT" | grep -q '"lifecycle-state": "PROVISIONING"'; then
             echo "Success! 'PROVISIONING' state found in output."
@@ -77,10 +82,11 @@ jobs:
             echo "Error: Success string not found in OCI output. Failing the step."
             exit 1
           fi
-
       - name: Send Discord Notification
-        if: always()
+        if: always() && env.DISCORD_WEBHOOK_URL != ''
         uses: sarisia/actions-status-discord@v1.15.4
+        env:
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
         with:
           webhook: ${{ secrets.DISCORD_WEBHOOK_URL }}
           title: "OCI VM Status: ${{ steps.create_vm.outcome }}"
@@ -89,7 +95,6 @@ jobs:
           description: |
             Attempt to create A1.Flex VM.
             **Status:** `${{ steps.create_vm.outcome }}`
-
             **Log Output:**
             ```json
             ${{ steps.create_vm.outputs.log_data }}
